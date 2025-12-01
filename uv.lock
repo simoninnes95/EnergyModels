@@ -100,11 +100,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "matplotlib", specifier = ">=3.10.7" },
-    { name = "numpy", specifier = ">=2.3.5" },
-    { name = "torch", specifier = ">=2.9.1" },
-    { name = "torchvision", specifier = ">=0.24.1" },
-    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "matplotlib", specifier = "==3.10.7" },
+    { name = "numpy", specifier = "==2.3.5" },
+    { name = "torch", specifier = "==2.9.1" },
+    { name = "torchvision", specifier = "==0.24.1" },
+    { name = "tqdm", specifier = "==4.67.1" },
 ]
 
 [[package]]

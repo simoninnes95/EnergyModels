@@ -130,13 +130,14 @@ def collate(batch_list):
     return out
 
 # --------------------- TRAINING LOOP ---------------------
-def training_step(E, batch_demo, batch_train, opt_theta, K=10, alpha_x=1e-2, alpha_a=5e-3, lam=1.0):
+def training_step(E, batch_demo, opt_theta, K=10, alpha_x=1e-2, alpha_a=5e-3, lam=1.0):
     # 1) infer w's from demos (stop-grad on theta for simplicity)
     w_x, w_a = infer_concept_codes(E, batch_demo, DW=DW, steps=K, lr=0.1)
     w_x, w_a = w_x.detach(), w_a.detach()  # detach after inference to stop grad on theta
 
-    # 2) sample negatives
-    x0, x1, a = batch_train['x0'], batch_train['x1'], batch_train['a']
+    # 2) Use the same batch as both demo and training data
+    # This preserves the concept codes without dilution
+    x0, x1, a = batch_demo['x0'], batch_demo['x1'], batch_demo['a']
     a_init = torch.randn_like(a)
     x_tilde = sgld_optimize_x(E, x0, a, w_x, steps=K, alpha=alpha_x)
     a_tilde = sgld_optimize_a(E, x0, a_init, w_a, steps=K, alpha=alpha_a)
@@ -189,29 +190,21 @@ def main():
 
     pbar = trange(STEPS, desc="Training")
     running = {}
+    dl_iter = iter(dl)
+    
     for step in pbar:
-        # Make a fresh demo set (few-shot) from same distribution
-        demo = make_demo_batch(ds, shots=DEMO_SHOTS, device=DEVICE)
-        global dl_iter
-        # One training batch
+        # Get a training batch
         try:
             batch = next(dl_iter)
-        except NameError:
-            pass
         except StopIteration:
-            pass
-        # Use an iterator to avoid resetting shuffle every time
-        
-        try:
-            batch = next(dl_iter)
-        except:
             dl_iter = iter(dl)
             batch = next(dl_iter)
 
         for k in batch:
             batch[k] = batch[k].to(DEVICE)
 
-        logs = training_step(E, demo, batch, opt, K=K_SGLD, alpha_x=ALPHA_X, alpha_a=ALPHA_A, lam=LAMBDA_KL)
+        # Use the same batch for both demo (concept code inference) and training
+        logs = training_step(E, batch, opt, K=K_SGLD, alpha_x=ALPHA_X, alpha_a=ALPHA_A, lam=LAMBDA_KL)
         for k,v in logs.items():
             running[k] = 0.97*running.get(k, v) + 0.03*v  # EMA for display
         pbar.set_postfix({k: f"{running[k]:.3f}" for k in ["loss","L_ml","L_kl"]})

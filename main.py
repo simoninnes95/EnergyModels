@@ -16,14 +16,14 @@
 # You can tweak HYPERPARAMS near the top to run faster/slower.
 # ------------------------------------------------------------
 
-import math
+# import math
 import random
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
-from tqdm import trange, tqdm
+from torch.utils.data import DataLoader
+from tqdm import trange
 import matplotlib.pyplot as plt
 import logging
 
@@ -82,18 +82,16 @@ def sgld_step(var, grad, alpha):
     noise = torch.randn_like(var) * (alpha ** 0.5)
     return var + 0.5 * alpha * grad + noise
 
-@torch.no_grad()
 def sgld_optimize_x(E, x_init, a, w, steps=10, alpha=1e-2):
-    x = x_init.clone().requires_grad_(True)
+    x = x_init.clone().detach().requires_grad_(True)
     for _ in range(steps):
         E_x = E(x, a, w).sum()
         grad, = torch.autograd.grad(E_x, x, create_graph=False)
         x = sgld_step(x, grad, alpha).detach().requires_grad_(True)
     return x.detach()
 
-@torch.no_grad()
 def sgld_optimize_a(E, x, a_init, w, steps=10, alpha=1e-2):
-    a = a_init.clone().requires_grad_(True)
+    a = a_init.clone().detach().requires_grad_(True)
     for _ in range(steps):
         E_a = E(x, a, w).sum()
         grad, = torch.autograd.grad(E_a, a, create_graph=False)
@@ -192,7 +190,7 @@ def main():
     running = {}
     dl_iter = iter(dl)
     
-    for step in pbar:
+    for _ in pbar:
         # Get a training batch
         try:
             batch = next(dl_iter)
@@ -203,6 +201,11 @@ def main():
         for k in batch:
             batch[k] = batch[k].to(DEVICE)
 
+        # print(batch['x0'].shape)
+        # print(batch['x1'].shape)
+        # print(batch['a'].shape)
+        # print(batch)
+
         # Use the same batch for both demo (concept code inference) and training
         logs = training_step(E, batch, opt, K=K_SGLD, alpha_x=ALPHA_X, alpha_a=ALPHA_A, lam=LAMBDA_KL)
         for k,v in logs.items():
@@ -211,13 +214,15 @@ def main():
 
     # --------------------- QUALITATIVE EVALUATION ---------------------
     E.eval()
-    with torch.no_grad():
-        demo = make_demo_batch(ds, shots=DEMO_SHOTS, device=DEVICE)
-        w_x, w_a = infer_concept_codes(E, demo, DW=DW, steps=K_SGLD, lr=0.1)
+    
+    # Infer concept codes (needs gradients for w_x, w_a optimization)
+    demo = make_demo_batch(ds, shots=DEMO_SHOTS, device=DEVICE)
+    w_x, w_a = infer_concept_codes(E, demo, DW=DW, steps=K_SGLD, lr=0.1)
 
-        # Take a fresh eval instance
-        eval_sample = collate([ds[0] for _ in range(EVAL_BATCH)])
-        for k in eval_sample: eval_sample[k] = eval_sample[k].to(DEVICE)
+    # Get eval sample
+    eval_sample = collate([ds[0] for _ in range(EVAL_BATCH)])
+    for k in eval_sample:
+        eval_sample[k] = eval_sample[k].to(DEVICE)
 
     # Identification: infer a via SGLD with x fixed
     a_init = torch.randn_like(eval_sample["a"])

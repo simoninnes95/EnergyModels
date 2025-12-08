@@ -27,8 +27,11 @@ from tqdm import trange
 import matplotlib.pyplot as plt
 import logging
 
+from torch.utils.tensorboard import SummaryWriter
 from datasets.line import LineConceptDataset
 from models.relational_energy import RelationalEnergy
+
+writer = SummaryWriter()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -128,7 +131,8 @@ def collate(batch_list):
     return out
 
 # --------------------- TRAINING LOOP ---------------------
-def training_step(E, batch_demo, opt_theta, K=10, alpha_x=1e-2, alpha_a=5e-3, lam=1.0):
+def training_step(E, batch_demo, opt_theta, step=None,K=10, alpha_x=1e-2, alpha_a=5e-3, lam=1.0):
+    E.train()
     # 1) infer w's from demos (stop-grad on theta for simplicity)
     w_x, w_a = infer_concept_codes(E, batch_demo, DW=DW, steps=K, lr=0.1)
     w_x, w_a = w_x.detach(), w_a.detach()  # detach after inference to stop grad on theta
@@ -154,6 +158,7 @@ def training_step(E, batch_demo, opt_theta, K=10, alpha_x=1e-2, alpha_a=5e-3, la
 
     loss = L_ml + lam * L_kl
 
+    writer.add_scalar("Loss/train", loss, step)
     opt_theta.zero_grad(set_to_none=True)
     loss.backward()
     nn.utils.clip_grad_norm_(E.parameters(), 1.0)
@@ -190,8 +195,8 @@ def main():
     running = {}
     dl_iter = iter(dl)
     
+    logging.info("Starting Training")
     for _ in pbar:
-        # Get a training batch
         try:
             batch = next(dl_iter)
         except StopIteration:
@@ -207,10 +212,13 @@ def main():
         # print(batch)
 
         # Use the same batch for both demo (concept code inference) and training
-        logs = training_step(E, batch, opt, K=K_SGLD, alpha_x=ALPHA_X, alpha_a=ALPHA_A, lam=LAMBDA_KL)
+        logs = training_step(E, batch, opt,step=_, K=K_SGLD, alpha_x=ALPHA_X, alpha_a=ALPHA_A, lam=LAMBDA_KL)
         for k,v in logs.items():
             running[k] = 0.97*running.get(k, v) + 0.03*v  # EMA for display
         pbar.set_postfix({k: f"{running[k]:.3f}" for k in ["loss","L_ml","L_kl"]})
+    
+    writer.flush()
+    logging.info("Finished Training")
 
     # --------------------- QUALITATIVE EVALUATION ---------------------
     E.eval()
@@ -235,30 +243,72 @@ def main():
     x1_np = x_tilde[0, 1, :, :2].detach().cpu().numpy()
 
     # --------------------- PLOTS ---------------------
-    # 1) Attention bar plot (identification)
-    plt.figure()
-    plt.title("Identification: inferred attention probabilities per entity")
-    plt.bar(np.arange(N), a_prob)
-    plt.xlabel("Entity index")
-    plt.ylabel("sigmoid(a)")
-    plt.ylim(0, 1.0)
+    # Get ground truth attention for visualization
+    gt_a = eval_sample["a"][0].detach().cpu().numpy()
+    attended_idx = np.where(gt_a > 1.0)[0]  # entities with high attention
+    
+    # 1) Attention comparison plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    
+    ax1.bar(np.arange(N), gt_a, alpha=0.7, label="Ground Truth")
+    ax1.set_title("Ground Truth Attention")
+    ax1.set_xlabel("Entity index")
+    ax1.set_ylabel("Attention value")
+    ax1.set_ylim(-0.5, 3.5)
+    ax1.axhline(y=1.0, color='r', linestyle='--', alpha=0.3)
+    
+    ax2.bar(np.arange(N), a_prob, alpha=0.7, color='orange', label="Inferred")
+    ax2.set_title("Inferred Attention (Identification)")
+    ax2.set_xlabel("Entity index")
+    ax2.set_ylabel("sigmoid(a)")
+    ax2.set_ylim(0, 1.0)
+    ax2.axhline(y=0.5, color='r', linestyle='--', alpha=0.3)
+    
     plt.tight_layout()
     plt.savefig("identification_attention.png")
 
-    # 2) Generation scatter plot: initial vs generated final positions
-    plt.figure()
-    plt.title("Generation: initial (t=0) vs generated final (t=1) positions")
-    plt.scatter(x0_np[:,0], x0_np[:,1], label="t=0")
-    plt.scatter(x1_np[:,0], x1_np[:,1], label="generated t=1", marker="x")
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.legend()
-    plt.axis("equal")
+    # 2) Generation visualization with lines
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Left: Initial positions (t=0)
+    ax1.scatter(x0_np[:,0], x0_np[:,1], c='gray', s=100, alpha=0.5, label="all entities")
+    ax1.scatter(x0_np[attended_idx,0], x0_np[attended_idx,1], c='blue', s=150, 
+                marker='o', label="attended entities", edgecolors='black', linewidths=2)
+    ax1.set_title("Initial State (t=0)")
+    ax1.set_xlabel("x")
+    ax1.set_ylabel("y")
+    ax1.legend()
+    ax1.axis("equal")
+    ax1.grid(True, alpha=0.3)
+    
+    # Right: Generated final positions (t=1) with line fit
+    ax2.scatter(x1_np[:,0], x1_np[:,1], c='gray', s=100, alpha=0.5, label="all entities")
+    
+    # Get attended entities from inferred attention (>0.5 threshold)
+    inferred_attended = np.where(a_prob > 0.5)[0]
+    if len(inferred_attended) >= 2:
+        ax2.scatter(x1_np[inferred_attended,0], x1_np[inferred_attended,1], 
+                   c='red', s=150, marker='x', label="inferred line entities", linewidths=3)
+        
+        # Fit and draw line through attended points
+        attended_points = x1_np[inferred_attended]
+        # Sort by x coordinate for cleaner line visualization
+        sorted_idx = np.argsort(attended_points[:, 0])
+        sorted_points = attended_points[sorted_idx]
+        ax2.plot(sorted_points[:, 0], sorted_points[:, 1], 'r--', 
+                linewidth=2, alpha=0.6, label="fitted line")
+    
+    ax2.set_title("Generated State (t=1) - Line Formation")
+    ax2.set_xlabel("x")
+    ax2.set_ylabel("y")
+    ax2.legend()
+    ax2.axis("equal")
+    ax2.grid(True, alpha=0.3)
+    
     plt.tight_layout()
     plt.savefig("generation_positions.png")
 
-    print("Saved figures: identification_attention.png, generation_positions.png")
-    print("Done.")
+    logging.info("Saved figures: identification_attention.png, generation_positions.png")
 
 if __name__ == "__main__":
     main()

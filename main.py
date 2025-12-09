@@ -60,12 +60,12 @@ HIDDEN = 128
 # Training
 BATCH_SIZE = 128
 DEMO_SHOTS = 5     # few-shot demos per concept instance
-STEPS = 800        # training iterations (increase to 5000-10000 for better quality)
-LR = 1e-3
-K_SGLD = 10
-ALPHA_X = 1e-2     # SGLD step for x
-ALPHA_A = 5e-3     # SGLD step for a
-LAMBDA_KL = 1.0
+STEPS = 2000       # training iterations (increase to 5000-10000 for better quality)
+LR = 3e-4
+K_SGLD = 30        # increased for better sampling
+ALPHA_X = 5e-3     # SGLD step for x
+ALPHA_A = 1e-2     # SGLD step for a
+LAMBDA_KL = 0.1    # reduced to focus on contrastive learning
 
 # Eval/visualization
 EVAL_BATCH = 1     # visualize a single instance
@@ -82,8 +82,9 @@ seed_all(SEED)
 
 # --------------------- SGLD ---------------------
 def sgld_step(var, grad, alpha):
+    """SGLD step: moves DOWN the energy gradient to find low-energy states"""
     noise = torch.randn_like(var) * (alpha ** 0.5)
-    return var + 0.5 * alpha * grad + noise
+    return var - 0.5 * alpha * grad + noise  # NEGATIVE gradient to minimize energy
 
 def sgld_optimize_x(E, x_init, a, w, steps=10, alpha=1e-2):
     x = x_init.clone().detach().requires_grad_(True)

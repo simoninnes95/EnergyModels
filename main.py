@@ -55,7 +55,7 @@ DX = 2             # features per entity: 2D position only
 
 # Model
 DW = 16            # dimension of concept code w
-HIDDEN = 128
+HIDDEN = 512
 
 # Training
 BATCH_SIZE = 128
